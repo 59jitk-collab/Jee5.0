@@ -1,0 +1,84 @@
+
+name: Build JEE Study OS APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Create temporary debug keystore
+        run: |
+          keytool -genkeypair \
+            -v \
+            -keystore "$RUNNER_TEMP/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Ensure Local .env Exists Without Secrets
+        run: |
+          if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+            cp .env.example .env
+          elif [ ! -f ".env" ]; then
+            echo "GEMINI_API_KEY=" > .env
+          fi
+
+      - name: Prepare Google Services Configuration
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ ! -f "app/google-services.json" ]; then
+            if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+              echo "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            elif [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+              echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+            fi
+          fi
+
+      - name: Build debug APK
+        env:
+          DEBUG_KEYSTORE: ${{ runner.temp }}/debug.keystore
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon assembleDebug \
+              -Pandroid.injected.signing.store.file="$DEBUG_KEYSTORE" \
+              -Pandroid.injected.signing.store.password=android \
+              -Pandroid.injected.signing.key.alias=androiddebugkey \
+              -Pandroid.injected.signing.key.password=android
+          else
+            gradle --no-daemon assembleDebug \
+              -Pandroid.injected.signing.store.file="$DEBUG_KEYSTORE" \
+              -Pandroid.injected.signing.store.password=android \
+              -Pandroid.injected.signing.key.alias=androiddebugkey \
+              -Pandroid.injected.signing.key.password=android
+          fi
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JEE-Study-OS-debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+          
